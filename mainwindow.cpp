@@ -153,3 +153,11 @@ void MainWindow::refreshLayout()
         loadSelectedLayout(currentFile);
     }
 }
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    if (m_layoutManager) {
+        m_layoutManager->adjustMainWindowGeometryToScreen();
+    }
+}

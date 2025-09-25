@@ -26,6 +26,7 @@ public slots:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 public slots:
     void saveLayout();

@@ -18,20 +18,18 @@ DockWidgetEventFilter::DockWidgetEventFilter(ColorSwatch* dockWidget, QMainWindo
 
 bool DockWidgetEventFilter::eventFilter(QObject *watched, QEvent *event)
 {
-    if (event->type() == QEvent::Enter) {
+    if (event->type() == QEvent::Enter || event->type() == QEvent::FocusIn) {
         if (auto* centralWidget = qobject_cast<QTextEdit*>(m_mainWindow->centralWidget())) {
-            QString info = QString("Object: %1\nGeometry: %2, %3, %4, %5\nState: %6\nSize: %7, %8")
+            QString info = QString("Object: %1\nState: %2\nx: %3, y: %4\nwidth: %5, height: %6")
                                 .arg(m_dockWidget->objectName())
+                                .arg(m_dockWidget->isFloating() ? "Floating" : "Docked")
                                 .arg(m_dockWidget->geometry().x())
                                 .arg(m_dockWidget->geometry().y())
                                 .arg(m_dockWidget->geometry().width())
-                                .arg(m_dockWidget->geometry().height())
-                                .arg(m_dockWidget->isFloating() ? "Floating" : "Docked")
-                                .arg(m_dockWidget->width())
-                                .arg(m_dockWidget->height());
+                                .arg(m_dockWidget->geometry().height());
             centralWidget->setText(info);
         }
-    } else if (event->type() == QEvent::Leave) {
+    } else if (event->type() == QEvent::Leave || event->type() == QEvent::FocusOut) {
         if (auto* centralWidget = qobject_cast<QTextEdit*>(m_mainWindow->centralWidget())) {
             centralWidget->setText(tr("This is the central widget.\n\n"
                                       "You can dock other widgets around this area.\n"
@@ -67,6 +65,7 @@ void DockManager::destroyDockWidgets()
     m_dockWidgetAreas.clear();
     m_viewMenu->clear();
 }
+
 
 DockManager::DockManager(QMainWindow *parent)
     : QObject(parent), m_mainWindow(parent), m_viewMenu(new QMenu(tr("&View"), parent))
@@ -450,7 +449,55 @@ void DockManager::loadDockWidgetsLayout(QXmlStreamReader &xmlReader)
     }
 
     m_blockResizeUpdates = false;
+    enforceDockAreaSizeConstraints();
     qDebug() << "Dock widgets layout loaded with fixed sizes";
+}
+
+void DockManager::enforceDockAreaSizeConstraints()
+{
+    QMap<Qt::DockWidgetArea, QList<QDockWidget*>> areaDocks;
+    for (ColorSwatch* swatch : m_dockWidgets) {
+        if (!swatch->isFloating()) {
+            areaDocks[m_mainWindow->dockWidgetArea(swatch)].append(swatch);
+        }
+    }
+
+    int minCentralWidth = 100;
+    int minCentralHeight = 100;
+
+    QRect centralGeometry = m_mainWindow->centralWidget()->geometry();
+    int availableWidth = m_mainWindow->width() - centralGeometry.left() - (m_mainWindow->width() - centralGeometry.right());
+    int availableHeight = m_mainWindow->height() - centralGeometry.top() - (m_mainWindow->height() - centralGeometry.bottom());
+
+    for (auto it = areaDocks.begin(); it != areaDocks.end(); ++it) {
+        Qt::DockWidgetArea area = it.key();
+        QList<QDockWidget*> docks = it.value();
+        int totalSize = 0;
+
+        if (area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea) {
+            for (QDockWidget* dock : docks) {
+                totalSize += dock->width();
+            }
+            if (availableWidth - totalSize < minCentralWidth) {
+                int newTotalSize = availableWidth - minCentralWidth;
+                double scale = (double)newTotalSize / totalSize;
+                for (QDockWidget* dock : docks) {
+                    dock->setFixedWidth(dock->width() * scale);
+                }
+            }
+        } else { // Top or Bottom
+            for (QDockWidget* dock : docks) {
+                totalSize += dock->height();
+            }
+            if (availableHeight - totalSize < minCentralHeight) {
+                int newTotalSize = availableHeight - minCentralHeight;
+                double scale = (double)newTotalSize / totalSize;
+                for (QDockWidget* dock : docks) {
+                    dock->setFixedHeight(dock->height() * scale);
+                }
+            }
+        }
+    }
 }
 
 void DockManager::loadWidgetProperties(QXmlStreamReader &xmlReader, QWidget *widget)
