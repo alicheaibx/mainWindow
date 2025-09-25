@@ -21,6 +21,8 @@ signals:
     void loadDockWidgetsLayoutRequested(QXmlStreamReader &xmlReader);
     void allowResizeChanged(bool allowed);
 
+public slots:
+    void adjustMainWindowGeometryToScreen();
 private:
     void saveMainWindowGeometry(QXmlStreamWriter &xmlWriter);
     void loadMainWindowGeometry(QXmlStreamReader &xmlReader);

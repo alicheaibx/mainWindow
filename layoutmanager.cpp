@@ -8,10 +8,14 @@
 #include <QVariant>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QWindow>
 
 LayoutManager::LayoutManager(QMainWindow *parent)
     : QObject(parent), m_mainWindow(parent)
 {
+    if (m_mainWindow->windowHandle()) {
+        connect(m_mainWindow->windowHandle(), &QWindow::screenChanged, this, &LayoutManager::adjustMainWindowGeometryToScreen);
+    }
 }
 
 void LayoutManager::saveLayoutToFile(const QString &fileName)
@@ -102,21 +106,9 @@ void LayoutManager::loadMainWindowGeometry(QXmlStreamReader &xmlReader)
     bool nestedDocking = (xmlReader.attributes().value("nestedDocking") == QLatin1String("true"));
     bool groupMovement = (xmlReader.attributes().value("groupMovement") == QLatin1String("true"));
 
-    QRect screenGeometry = QGuiApplication::primaryScreen()->availableGeometry();
-    if (width > screenGeometry.width()) {
-        width = screenGeometry.width();
-    }
-    if (height > screenGeometry.height()) {
-        height = screenGeometry.height();
-    }
-    if (x < screenGeometry.x()) {
-        x = screenGeometry.x();
-    }
-    if (y < screenGeometry.y()) {
-        y = screenGeometry.y();
-    }
-
     m_mainWindow->setGeometry(x, y, width, height);
+    adjustMainWindowGeometryToScreen();
+
     m_mainWindow->setDockNestingEnabled(nestedDocking);
 
     QMainWindow::DockOptions options = m_mainWindow->dockOptions();
@@ -127,6 +119,36 @@ void LayoutManager::loadMainWindowGeometry(QXmlStreamReader &xmlReader)
     }
     m_mainWindow->setDockOptions(options);
     xmlReader.skipCurrentElement();
+}
+
+void LayoutManager::adjustMainWindowGeometryToScreen()
+{
+    if (!m_mainWindow || !m_mainWindow->windowHandle()) return;
+
+    QRect screenGeometry = m_mainWindow->windowHandle()->screen()->availableGeometry();
+    QRect windowGeometry = m_mainWindow->geometry();
+
+    int newWidth = qMin(windowGeometry.width(), screenGeometry.width());
+    int newHeight = qMin(windowGeometry.height(), screenGeometry.height());
+
+    int newX = windowGeometry.x();
+    int newY = windowGeometry.y();
+
+    if (newX < screenGeometry.x()) {
+        newX = screenGeometry.x();
+    }
+    if (newY < screenGeometry.y()) {
+        newY = screenGeometry.y();
+    }
+
+    if (newX + newWidth > screenGeometry.x() + screenGeometry.width()) {
+        newX = screenGeometry.x() + screenGeometry.width() - newWidth;
+    }
+    if (newY + newHeight > screenGeometry.y() + screenGeometry.height()) {
+        newY = screenGeometry.y() + screenGeometry.height() - newHeight;
+    }
+
+    m_mainWindow->setGeometry(newX, newY, newWidth, newHeight);
 }
 
 void LayoutManager::saveCentralWidgetProperties(QXmlStreamWriter &xmlWriter)
