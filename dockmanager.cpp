@@ -10,6 +10,8 @@
 #include <QSplitter>
 #include <QTextEdit>
 #include <QEvent>
+#include <QStringList>
+#include <QCryptographicHash>
 
 DockWidgetEventFilter::DockWidgetEventFilter(ColorSwatch* dockWidget, QMainWindow* mainWindow)
     : QObject(mainWindow), m_dockWidget(dockWidget), m_mainWindow(mainWindow)
@@ -41,6 +43,20 @@ bool DockWidgetEventFilter::eventFilter(QObject *watched, QEvent *event)
     return QObject::eventFilter(watched, event);
 }
 
+void DockManager::ensureSplitterObjectNames()
+{
+    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
+    for (QSplitter* splitter : splitters) {
+        QStringList widgetNames;
+        for (int i = 0; i < splitter->count(); ++i) {
+            widgetNames.append(splitter->widget(i)->objectName());
+        }
+        widgetNames.sort();
+        QByteArray idData = widgetNames.join(",").toUtf8();
+        QString uniqueID = QString("splitter_") + QCryptographicHash::hash(idData, QCryptographicHash::Md5).toHex();
+        splitter->setObjectName(uniqueID);
+    }
+}
 
 void DockManager::destroyDockWidgets()
 {
@@ -54,7 +70,6 @@ void DockManager::destroyDockWidgets()
     m_dockWidgetAreas.clear();
     m_viewMenu->clear();
 }
-
 
 DockManager::DockManager(QMainWindow *parent)
     : QObject(parent), m_mainWindow(parent), m_viewMenu(new QMenu(tr("&View"), parent))
@@ -198,7 +213,20 @@ void DockManager::updateDockWidgetSizeConstraints(ColorSwatch *swatch)
 void DockManager::saveDockWidgetsLayout(QXmlStreamWriter &xmlWriter)
 {
     xmlWriter.writeStartElement("DockWidgets");
+    ensureSplitterObjectNames();
     xmlWriter.writeAttribute("state", m_mainWindow->saveState().toBase64());
+
+    // Save splitter states
+    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
+    xmlWriter.writeStartElement("SplitterStates");
+    for (QSplitter* splitter : splitters)
+    {
+        xmlWriter.writeStartElement("Splitter");
+        xmlWriter.writeAttribute("name", splitter->objectName());
+        xmlWriter.writeAttribute("state", splitter->saveState().toBase64());
+        xmlWriter.writeEndElement();
+    }
+    xmlWriter.writeEndElement();
 
     QSet<QDockWidget*> savedDockWidgets;
     for (ColorSwatch *dockWidget : m_dockWidgets) {
@@ -304,8 +332,20 @@ void DockManager::loadDockWidgetsLayout(QXmlStreamReader &xmlReader)
         m_mainWindow->restoreState(QByteArray::fromBase64(xmlReader.attributes().value("state").toUtf8()));
     }
 
+    QMap<QString, QByteArray> splitterStates;
+
     while (xmlReader.readNextStartElement()) {
-        if (xmlReader.name() == QLatin1String("DockWidget")) {
+        if (xmlReader.name() == QLatin1String("SplitterStates")) {
+            while (xmlReader.readNextStartElement()) {
+                if (xmlReader.name() == QLatin1String("Splitter")) {
+                    QString name = xmlReader.attributes().value("name").toString();
+                    QByteArray state = QByteArray::fromBase64(xmlReader.attributes().value("state").toUtf8());
+                    splitterStates[name] = state;
+                    xmlReader.skipCurrentElement();
+                }
+            }
+        }
+        else if (xmlReader.name() == QLatin1String("DockWidget")) {
             QString name = xmlReader.attributes().value("name").toString();
             QString title;
             bool visible = true;
@@ -402,6 +442,15 @@ void DockManager::loadDockWidgetsLayout(QXmlStreamReader &xmlReader)
         }
     }
 
+    // Restore splitter states
+    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
+    for (QSplitter* splitter : splitters)
+    {
+        if (splitterStates.contains(splitter->objectName()))
+        {
+            splitter->restoreState(splitterStates.value(splitter->objectName()));
+        }
+    }
 
     m_blockResizeUpdates = false;
     enforceDockAreaSizeConstraints();
@@ -410,45 +459,58 @@ void DockManager::loadDockWidgetsLayout(QXmlStreamReader &xmlReader)
 
 void DockManager::enforceDockAreaSizeConstraints()
 {
-    QMap<Qt::DockWidgetArea, QList<QDockWidget*>> areaDocks;
-    for (ColorSwatch* swatch : m_dockWidgets) {
-        if (!swatch->isFloating()) {
-            areaDocks[m_mainWindow->dockWidgetArea(swatch)].append(swatch);
-        }
+    const int minCentralWidth = 100;
+    const int minCentralHeight = 100;
+
+    QWidget* centralWidget = m_mainWindow->centralWidget();
+    if (!centralWidget) {
+        return;
     }
 
-    int minCentralWidth = 100;
-    int minCentralHeight = 100;
-
-    QRect centralGeometry = m_mainWindow->centralWidget()->geometry();
-    int availableWidth = m_mainWindow->width() - centralGeometry.left() - (m_mainWindow->width() - centralGeometry.right());
-    int availableHeight = m_mainWindow->height() - centralGeometry.top() - (m_mainWindow->height() - centralGeometry.bottom());
-
-    for (auto it = areaDocks.begin(); it != areaDocks.end(); ++it) {
-        Qt::DockWidgetArea area = it.key();
-        QList<QDockWidget*> docks = it.value();
+    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
+    for (QSplitter* splitter : splitters) {
+        QList<int> sizes = splitter->sizes();
         int totalSize = 0;
+        for (int size : sizes) {
+            totalSize += size;
+        }
 
-        if (area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea) {
-            for (QDockWidget* dock : docks) {
-                totalSize += dock->width();
-            }
-            if (availableWidth - totalSize < minCentralWidth) {
-                int newTotalSize = availableWidth - minCentralWidth;
-                double scale = (double)newTotalSize / totalSize;
-                for (QDockWidget* dock : docks) {
-                    dock->setFixedWidth(dock->width() * scale);
+        if (splitter->orientation() == Qt::Horizontal) {
+            if (centralWidget->width() < minCentralWidth) {
+                int deficit = minCentralWidth - centralWidget->width();
+                int totalReducibleSize = 0;
+                for (int i = 0; i < splitter->count(); ++i) {
+                    if (splitter->widget(i) != centralWidget) {
+                        totalReducibleSize += sizes[i];
+                    }
+                }
+                if (totalReducibleSize > 0) {
+                    double scale = (double)(totalReducibleSize - deficit) / totalReducibleSize;
+                    for (int i = 0; i < splitter->count(); ++i) {
+                        if (splitter->widget(i) != centralWidget) {
+                            sizes[i] = sizes[i] * scale;
+                        }
+                    }
+                    splitter->setSizes(sizes);
                 }
             }
-        } else { // Top or Bottom
-            for (QDockWidget* dock : docks) {
-                totalSize += dock->height();
-            }
-            if (availableHeight - totalSize < minCentralHeight) {
-                int newTotalSize = availableHeight - minCentralHeight;
-                double scale = (double)newTotalSize / totalSize;
-                for (QDockWidget* dock : docks) {
-                    dock->setFixedHeight(dock->height() * scale);
+        } else {
+            if (centralWidget->height() < minCentralHeight) {
+                int deficit = minCentralHeight - centralWidget->height();
+                int totalReducibleSize = 0;
+                for (int i = 0; i < splitter->count(); ++i) {
+                    if (splitter->widget(i) != centralWidget) {
+                        totalReducibleSize += sizes[i];
+                    }
+                }
+                if (totalReducibleSize > 0) {
+                    double scale = (double)(totalReducibleSize - deficit) / totalReducibleSize;
+                    for (int i = 0; i < splitter->count(); ++i) {
+                        if (splitter->widget(i) != centralWidget) {
+                            sizes[i] = sizes[i] * scale;
+                        }
+                    }
+                    splitter->setSizes(sizes);
                 }
             }
         }

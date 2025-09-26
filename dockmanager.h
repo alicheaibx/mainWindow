@@ -61,6 +61,7 @@ private:
     void handleDockWidgetResized(ColorSwatch *swatch);
     void saveWidgetProperties(QXmlStreamWriter &xmlWriter, QWidget *widget);
     void loadWidgetProperties(QXmlStreamReader &xmlReader, QWidget *widget);
+    void ensureSplitterObjectNames();
     void enforceDockAreaSizeConstraints();
     void applySavedSizesDelayed();  // Add this line
     bool m_sizesFixed = true;
