@@ -18,40 +18,29 @@ DockWidgetEventFilter::DockWidgetEventFilter(ColorSwatch* dockWidget, QMainWindo
 
 bool DockWidgetEventFilter::eventFilter(QObject *watched, QEvent *event)
 {
-    if (event->type() == QEvent::Enter || event->type() == QEvent::FocusIn) {
+    if (event->type() == QEvent::MouseButtonPress) {
         if (auto* centralWidget = qobject_cast<QTextEdit*>(m_mainWindow->centralWidget())) {
-            QString info = QString("Object: %1\nState: %2\nx: %3, y: %4\nwidth: %5, height: %6")
-                                .arg(m_dockWidget->objectName())
-                                .arg(m_dockWidget->isFloating() ? "Floating" : "Docked")
-                                .arg(m_dockWidget->geometry().x())
-                                .arg(m_dockWidget->geometry().y())
-                                .arg(m_dockWidget->geometry().width())
-                                .arg(m_dockWidget->geometry().height());
+            QString info = QString("Object: %1\n").arg(m_dockWidget->objectName());
+            info.append(QString("State: %1\n").arg(m_dockWidget->isFloating() ? "Floating" : "Docked"));
+            info.append(QString("Geometry (x,y,w,h): %1, %2, %3, %4\n")
+                            .arg(m_dockWidget->geometry().x())
+                            .arg(m_dockWidget->geometry().y())
+                            .arg(m_dockWidget->geometry().width())
+                            .arg(m_dockWidget->geometry().height()));
+            info.append(QString("Tabbed: %1\n").arg(m_mainWindow->tabifiedDockWidgets(m_dockWidget).isEmpty() ? "No" : "Yes"));
+            if (m_dockWidget->parentWidget() && m_dockWidget->parentWidget()->inherits("QSplitter")) {
+                QSplitter* splitter = static_cast<QSplitter*>(m_dockWidget->parentWidget());
+                info.append(QString("In Splitter: Yes\n"));
+                info.append(QString("Splitter Orientation: %1\n").arg(splitter->orientation() == Qt::Horizontal ? "Horizontal" : "Vertical"));
+            } else {
+                info.append(QString("In Splitter: No\n"));
+            }
             centralWidget->setText(info);
-        }
-    } else if (event->type() == QEvent::Leave || event->type() == QEvent::FocusOut) {
-        if (auto* centralWidget = qobject_cast<QTextEdit*>(m_mainWindow->centralWidget())) {
-            centralWidget->setText(tr("This is the central widget.\n\n"
-                                      "You can dock other widgets around this area.\n"
-                                      "Use the View menu to toggle dock widgets.\n"
-                                      "Layouts can be saved and loaded from the File menu.\n"
-                                      "Use the dropdown above to switch between layouts."));
         }
     }
     return QObject::eventFilter(watched, event);
 }
 
-void DockManager::ensureSplitterObjectNames()
-{
-    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
-    for (int i = 0; i < splitters.count(); ++i)
-    {
-        if (splitters[i]->objectName().isEmpty())
-        {
-            splitters[i]->setObjectName(QString("splitter%1").arg(i));
-        }
-    }
-}
 
 void DockManager::destroyDockWidgets()
 {
@@ -209,20 +198,7 @@ void DockManager::updateDockWidgetSizeConstraints(ColorSwatch *swatch)
 void DockManager::saveDockWidgetsLayout(QXmlStreamWriter &xmlWriter)
 {
     xmlWriter.writeStartElement("DockWidgets");
-    ensureSplitterObjectNames();
     xmlWriter.writeAttribute("state", m_mainWindow->saveState().toBase64());
-
-    // Save splitter states
-    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
-    xmlWriter.writeStartElement("SplitterStates");
-    for (QSplitter* splitter : splitters)
-    {
-        xmlWriter.writeStartElement("Splitter");
-        xmlWriter.writeAttribute("name", splitter->objectName());
-        xmlWriter.writeAttribute("state", splitter->saveState().toBase64());
-        xmlWriter.writeEndElement();
-    }
-    xmlWriter.writeEndElement();
 
     QSet<QDockWidget*> savedDockWidgets;
     for (ColorSwatch *dockWidget : m_dockWidgets) {
@@ -328,20 +304,8 @@ void DockManager::loadDockWidgetsLayout(QXmlStreamReader &xmlReader)
         m_mainWindow->restoreState(QByteArray::fromBase64(xmlReader.attributes().value("state").toUtf8()));
     }
 
-    QMap<QString, QByteArray> splitterStates;
-
     while (xmlReader.readNextStartElement()) {
-        if (xmlReader.name() == QLatin1String("SplitterStates")) {
-            while (xmlReader.readNextStartElement()) {
-                if (xmlReader.name() == QLatin1String("Splitter")) {
-                    QString name = xmlReader.attributes().value("name").toString();
-                    QByteArray state = QByteArray::fromBase64(xmlReader.attributes().value("state").toUtf8());
-                    splitterStates[name] = state;
-                    xmlReader.skipCurrentElement();
-                }
-            }
-        }
-        else if (xmlReader.name() == QLatin1String("DockWidget")) {
+        if (xmlReader.name() == QLatin1String("DockWidget")) {
             QString name = xmlReader.attributes().value("name").toString();
             QString title;
             bool visible = true;
@@ -438,15 +402,6 @@ void DockManager::loadDockWidgetsLayout(QXmlStreamReader &xmlReader)
         }
     }
 
-    // Restore splitter states
-    QList<QSplitter*> splitters = m_mainWindow->findChildren<QSplitter*>();
-    for (QSplitter* splitter : splitters)
-    {
-        if (splitterStates.contains(splitter->objectName()))
-        {
-            splitter->restoreState(splitterStates.value(splitter->objectName()));
-        }
-    }
 
     m_blockResizeUpdates = false;
     enforceDockAreaSizeConstraints();
